@@ -3,205 +3,266 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>Brush Strokes — p5js interactive art</title>
+<title>Fireworks — p5js interactive art</title>
 <style>
   html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden;
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; color:#fff;
-    -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+    -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent;
+    touch-action:none; }
   #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
-  #hint { position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
-    font-size:12px; letter-spacing:3px; color:rgba(255,255,255,0.4); pointer-events:none; text-transform:uppercase; }
+  #hint { position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+    font-size:13px; letter-spacing:3px; color:rgba(255,255,255,0.5); pointer-events:none; text-transform:uppercase; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
 </head>
 <body>
 <div id="wrap"></div>
-<div id="hint">Tap to begin &nbsp;·&nbsp; drag to paint &nbsp;·&nbsp; R to reset</div>
+<div id="hint">Tap to launch fireworks</div>
 <script>
-/* Brush Strokes — white calligraphy written stroke by stroke on black.
-   Words write themselves with a brush-pen texture. Freehand painting too.
-   ALL TEXT IS IN ENGLISH. Procedural zen music. Interactive. */
+/* Fireworks — tap the screen to launch colorful fireworks.
+   TOUCH-BASED interaction for mobile phones.
+   ALL TEXT IS IN ENGLISH. Procedural celebratory music. */
 
-const WORDS = ["BREATHE","FLOW","STILLNESS","BECOME","WHISPER","DRIFT","SILENCE","AWAKEN","EMBER","LUMEN"];
 let CW, CH;
-let wordIndex, charProgress, holdTimer, started, fadeOut;
-let userStrokes, currentStroke;
-let audioCtx, masterGain, musicTimer, musicStep;
+let rockets, particles, sparks, stars;
+let audioCtx, masterGain, musicTimer, musicStep, started;
+let autoTimer;
+
+const PALETTES = [
+  ["#ff4d6d","#ff8c4d","#ffd94d","#fff"],
+  ["#4dffb8","#6bb6ff","#c44dff","#fff"],
+  ["#ff6b9d","#ffd94d","#4dffff","#fff"],
+  ["#9d6bff","#ff4dff","#4d9dff","#fff"],
+  ["#4dff4d","#a6ff4d","#fffb4d","#fff"],
+  ["#ff4d4d","#ff7a4d","#ffb84d","#fff"],
+];
 
 function setup(){
   CW=windowWidth; CH=windowHeight;
   const c=createCanvas(CW,CH); c.parent('wrap');
-  textFont('Georgia,"Times New Roman",serif');
-  textStyle(BOLD);
-  initScene();
-}
-function windowResized(){ CW=windowWidth; CH=windowHeight; resizeCanvas(CW,CH); initScene(); }
-
-function initScene(){
-  wordIndex=0; charProgress=0; holdTimer=0; started=false; fadeOut=0;
-  userStrokes=[]; currentStroke=null;
+  rockets=[]; particles=[]; sparks=[]; stars=[];
+  for(let i=0;i<80;i++) stars.push({x:random(CW),y:random(CH*0.7),r:random(0.5,2),tw:random(TWO_PI),sp:random(0.01,0.04)});
+  autoTimer=0; started=false;
 }
 
-// ---- AUDIO (zen, minimal) ----
+function windowResized(){ CW=windowWidth; CH=windowHeight; resizeCanvas(CW,CH); }
+
+// ---- TOUCH INTERACTION (mobile-first) ----
+// Primary: touch events for mobile phones. touchStarted returns false to
+// suppress the duplicate mouse event that p5.js would otherwise fire on tap.
+function touchStarted(){
+  if(!started){ started=true; startAudio(); document.getElementById('hint').style.opacity='0.3'; }
+  // p5.js updates mouseX/mouseY for both mouse and touch events
+  launchFirework(mouseX, mouseY);
+  return false;
+}
+function touchMoved(){
+  if(frameCount%6===0) launchMini(mouseX, mouseY);
+  return false;
+}
+// Desktop fallback (suppressed on mobile by touchStarted returning false)
+function mousePressed(){
+  if(!started){ started=true; startAudio(); document.getElementById('hint').style.opacity='0.3'; }
+  launchFirework(mouseX, mouseY);
+}
+
+// ---- AUDIO ----
 function startAudio(){
   if(audioCtx) return;
   try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){return;}
   masterGain=audioCtx.createGain(); masterGain.gain.value=0;
   masterGain.connect(audioCtx.destination);
   masterGain.gain.setValueAtTime(0,audioCtx.currentTime);
-  masterGain.gain.linearRampToValueAtTime(0.32,audioCtx.currentTime+4);
-  const delay=audioCtx.createDelay(3); delay.delayTime.value=0.8;
-  const fb=audioCtx.createGain(); fb.gain.value=0.55;
-  const wet=audioCtx.createGain(); wet.gain.value=0.6;
+  masterGain.gain.linearRampToValueAtTime(0.22,audioCtx.currentTime+2);
+  const delay=audioCtx.createDelay(1); delay.delayTime.value=0.25;
+  const fb=audioCtx.createGain(); fb.gain.value=0.3;
+  const wet=audioCtx.createGain(); wet.gain.value=0.35;
   delay.connect(fb); fb.connect(delay); delay.connect(wet); wet.connect(masterGain);
   audioCtx._send=delay;
-  const drone=audioCtx.createOscillator(); drone.type="sine"; drone.frequency.value=65.41; // C2
-  const dg=audioCtx.createGain(); dg.gain.value=0.1; drone.connect(dg); dg.connect(masterGain); drone.start();
   musicStep=0; scheduleMusic();
 }
-// pentatonic, very sparse and meditative
-const SCALE=[261.63,293.66,329.63,392.00,440.00,523.25];
+const MELODY=[523.25,587.33,659.25,783.99,880.00,783.99,659.25,587.33];
+const BASS=[130.81,196.00,174.61,146.83];
 function scheduleMusic(){
   if(!audioCtx) return;
   const t=audioCtx.currentTime;
-  const note=SCALE[musicStep%SCALE.length];
-  playNote(note,t,3.5,0.08,"sine");
-  if(musicStep%2===0) playNote(note*2,t+0.4,2.0,0.04,"sine");
+  const note=MELODY[musicStep%MELODY.length];
+  playNote(note,t,0.5,0.07,"triangle");
+  if(musicStep%2===0) playNote(BASS[(musicStep/2|0)%BASS.length],t,1.0,0.06,"sine");
   musicStep++;
-  musicTimer=setTimeout(scheduleMusic,900); // slow, sparse
+  musicTimer=setTimeout(scheduleMusic,400);
 }
 function playNote(freq,when,dur,vol,type){
   if(!audioCtx) return;
-  const osc=audioCtx.createOscillator(); osc.type=type||"sine"; osc.frequency.value=freq;
+  const osc=audioCtx.createOscillator(); osc.type=type||"triangle"; osc.frequency.value=freq;
   const g=audioCtx.createGain();
   g.gain.setValueAtTime(0.0001,when);
-  g.gain.exponentialRampToValueAtTime(vol,when+0.15);
+  g.gain.exponentialRampToValueAtTime(vol,when+0.03);
   g.gain.exponentialRampToValueAtTime(0.0001,when+dur);
   osc.connect(g); g.connect(masterGain); g.connect(audioCtx._send);
-  osc.start(when); osc.stop(when+dur+0.2);
+  osc.start(when); osc.stop(when+dur+0.1);
+}
+function playBoom(freq){
+  if(!audioCtx) return;
+  const t=audioCtx.currentTime;
+  // noise burst
+  const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.3,audioCtx.sampleRate);
+  const data=buf.getChannelData(0);
+  for(let i=0;i<data.length;i++) data[i]=(Math.random()*2-1)*Math.pow(1-i/data.length,2);
+  const noise=audioCtx.createBufferSource(); noise.buffer=buf;
+  const filter=audioCtx.createBiquadFilter(); filter.type="lowpass"; filter.frequency.value=freq;
+  const g=audioCtx.createGain(); g.gain.value=0.15;
+  noise.connect(filter); filter.connect(g); g.connect(masterGain);
+  noise.start(t);
 }
 
-// ---- INTERACTION ----
-function mousePressed(){ handlePress(mouseX,mouseY); }
-function touchStarted(){ handlePress(touchX,touchY); return false; }
-function handlePress(x,y){
-  if(!started){ started=true; startAudio(); document.getElementById('hint').style.opacity='0.3'; }
-  // start a freehand stroke
-  currentStroke={ points:[{x,y}], seed:random(1000) };
+// ---- FIREWORKS ----
+function launchFirework(tx,ty){
+  const sx=tx+random(-30,30), sy=CH+10;
+  const pal=random(PALETTES);
+  const type=random(["burst","ring","willow","chrysanthemum","heart"]);
+  rockets.push({x:sx,y:sy,tx:tx,ty:ty,pal:pal,type:type,
+    vy:-sqrt((ty-sy)*0.04+8),trail:[],done:false});
 }
-function mouseDragged(){ if(currentStroke){ currentStroke.points.push({x:mouseX,y:mouseY}); } }
-function touchMoved(){ if(currentStroke){ currentStroke.points.push({x:touchX,y:touchY}); } return false; }
-function mouseReleased(){ finishStroke(); }
-function touchEnded(){ finishStroke(); return false; }
-function finishStroke(){
-  if(currentStroke && currentStroke.points.length>1){ userStrokes.push(currentStroke); if(userStrokes.length>12) userStrokes.shift(); }
-  currentStroke=null;
+function launchMini(tx,ty){
+  const pal=random(PALETTES);
+  const count=int(random(12,20));
+  for(let i=0;i<count;i++){
+    const a=random(TWO_PI), sp=random(1,4);
+    particles.push(makeParticle(tx,ty,cos(a)*sp,sin(a)*sp,random(pal),random(2,4),60));
+  }
+  sparks.push({x:tx,y:ty,life:1,r:30});
+  playBoom(random(400,800));
 }
-function keyPressed(){ if(key==='r'||key==='R'){ initScene(); } }
 
-// ---- DRAW ----
-function draw(){
-  background(0);
+function makeParticle(x,y,vx,vy,col,size,life){
+  return{x,y,vx,vy,col,size,life:life||90,maxLife:life||90,
+    trail:[],gravity:0.06,drag:0.96,sparkle:random()<0.3};
+}
 
-  // ---- auto-writing word ----
-  const word=WORDS[wordIndex];
-  textAlign(CENTER,CENTER);
-  const sz=min(CW*0.85/textWidthEst(word), CH*0.22);
-  textSize(sz);
-  const totalW=textWidth(word);
-  const startX=CW/2-totalW/2;
-  const baseY=CH/2;
-
-  if(started){
-    charProgress += 0.035*(deltaTime/16.67);
-    if(charProgress >= word.length+1.5){
-      holdTimer += deltaTime/16.67;
-      if(holdTimer>90){
-        holdTimer=0; wordIndex=(wordIndex+1)%WORDS.length; charProgress=0;
-      }
+function updateRockets(){
+  for(const r of rockets){
+    if(r.done) continue;
+    r.trail.push({x:r.x,y:r.y,life:1});
+    if(r.trail.length>12) r.trail.shift();
+    r.y += r.vy; r.vy += 0.12;
+    r.x += (r.tx - r.x)*0.02;
+    if(r.vy >= -1 || r.y <= r.ty){
+      r.done=true; explode(r);
     }
   }
-
-  // draw each character with progressive brush reveal
-  for(let i=0;i<word.length;i++){
-    const ch=word[i];
-    const cw=textWidth(ch);
-    const cx=startY(startX,word,i)+cw/2;
-    if(i < floor(charProgress)){
-      // fully written — brush texture
-      drawBrushChar(ch,cx,baseY,sz,1,1.0);
-    } else if(i===floor(charProgress)){
-      const frac=charProgress-i;
-      drawBrushChar(ch,cx,baseY,sz,frac,1.0);
-      // brush head glow
-      drawingContext.shadowColor="#ffffff";
-      drawingContext.shadowBlur=20;
-      noStroke(); fill(255,255,255,220);
-      circle(cx,baseY,6+3*sin(frameCount*0.1));
-      drawingContext.shadowBlur=0;
+  rockets=rockets.filter(r=>!r.done);
+}
+function explode(r){
+  const x=r.x, y=r.y, pal=r.pal, type=r.type;
+  const count = type==="willow"?60 : type==="chrysanthemum"?50 : type==="ring"?40 : type==="heart"?36 : 45;
+  for(let i=0;i<count;i++){
+    let vx,vy,size,life;
+    if(type==="ring"){
+      const a=TWO_PI*i/count, sp=random(4,6);
+      vx=cos(a)*sp; vy=sin(a)*sp; size=random(3,5); life=random(70,100);
+    } else if(type==="willow"){
+      const a=random(TWO_PI), sp=random(1.5,3.5);
+      vx=cos(a)*sp; vy=sin(a)*sp-1; size=random(2,4); life=random(90,130);
+    } else if(type==="chrysanthemum"){
+      const a=random(TWO_PI), sp=random(3,7);
+      vx=cos(a)*sp; vy=sin(a)*sp; size=random(3,6); life=random(60,90);
+    } else if(type==="heart"){
+      const t=TWO_PI*i/count;
+      vx=16*pow(sin(t),3)*0.25;
+      vy=-(13*cos(t)-5*cos(2*t)-2*cos(3*t)-cos(4*t))*0.25;
+      size=random(3,5); life=random(70,100);
+    } else { // burst
+      const a=random(TWO_PI), sp=random(2,6);
+      vx=cos(a)*sp; vy=sin(a)*sp; size=random(3,5); life=random(60,90);
     }
+    const p=makeParticle(x,y,vx,vy,random(pal),size,life);
+    if(type==="willow") p.gravity=0.1;
+    if(type==="chrysanthemum") p.drag=0.94;
+    particles.push(p);
   }
-
-  // ---- draw user freehand strokes ----
-  for(const s of userStrokes) drawUserStroke(s);
-  if(currentStroke) drawUserStroke(currentStroke);
+  sparks.push({x,y,life:1,r:50});
+  playBoom(random(200,600));
 }
 
-function textWidthEst(w){ // approximate before textSize is set consistently
-  return w.length*0.62;
-}
-function startY(startX,word,i){
-  let x=startX;
-  for(let k=0;k<i;k++) x+=textWidth(word[k]);
-  return x;
-}
-
-// draw a character with brush-pen texture (multiple offset passes + noise)
-function drawBrushChar(ch,cx,cy,sz,frac,alpha){
-  push();
-  translate(cx,cy);
-  textSize(sz);
-  textAlign(CENTER,CENTER);
-  textStyle(BOLD);
-  // wet ink glow
-  drawingContext.shadowColor="rgba(255,255,255,0.5)";
-  drawingContext.shadowBlur=12*frac;
-  // multi-pass brush texture
-  for(let p=0;p<4;p++){
-    const ox=(noise(p*7.3+frameCount*0.01)-0.5)*3*frac;
-    const oy=(noise(p*3.1+frameCount*0.012)-0.5)*3*frac;
-    const a=alpha*(0.3+0.2*p)*frac;
-    fill(255,255,255,a*255);
-    text(ch,ox,oy);
+function updateParticles(){
+  for(const p of particles){
+    p.trail.push({x:p.x,y:p.y});
+    if(p.trail.length>6) p.trail.shift();
+    p.vx*=p.drag; p.vy*=p.drag; p.vy+=p.gravity;
+    p.x+=p.vx; p.y+=p.vy; p.life--;
   }
-  // crisp core
-  fill(255,255,255,255*frac);
-  text(ch,0,0);
-  drawingContext.shadowBlur=0;
-  pop();
+  particles=particles.filter(p=>p.life>0 && p.y<CH+20);
+  for(const s of sparks) s.life-=0.05;
+  sparks=sparks.filter(s=>s.life>0);
 }
 
-// draw a freehand user stroke with variable brush thickness
-function drawUserStroke(s){
-  const pts=s.points;
-  if(pts.length<2) return;
+function drawRockets(){
   noStroke();
-  for(let i=1;i<pts.length;i++){
-    const p0=pts[i-1], p1=pts[i];
-    const dx=p1.x-p0.x, dy=p1.y-p0.y;
-    const dist=Math.sqrt(dx*dx+dy*dy);
-    // thickness: slower = thicker (inverse of speed)
-    const speed=constrain(dist,1,30);
-    const r=constrain(18-speed*0.4,3,16);
-    const a=constrain(255-i*0.5,80,255);
-    // soft brush: multiple circles
-    fill(255,255,255,a*0.3);
-    circle((p0.x+p1.x)/2,(p0.y+p1.y)/2,r*1.8);
-    fill(255,255,255,a*0.6);
-    circle((p0.x+p1.x)/2,(p0.y+p1.y)/2,r);
-    fill(255,255,255,a);
-    circle((p0.x+p1.x)/2,(p0.y+p1.y)/2,r*0.5);
+  for(const r of rockets){
+    for(let i=0;i<r.trail.length;i++){
+      const t=r.trail[i]; t.life-=0.08;
+      fill(255,255,255,t.life*150);
+      circle(t.x,t.y,3*t.life);
+    }
+    drawingContext.shadowColor="#fff"; drawingContext.shadowBlur=10;
+    fill(255); circle(r.x,r.y,5);
+    drawingContext.shadowBlur=0;
   }
+}
+function drawParticles(){
+  noStroke();
+  for(const p of particles){
+    const a=p.life/p.maxLife;
+    // trail
+    for(let i=0;i<p.trail.length;i++){
+      const t=p.trail[i];
+      const ta=a*(i/p.trail.length)*0.4;
+      const c=color(p.col); c.setAlpha(ta*255);
+      fill(c); circle(t.x,t.y,p.size*0.6*(i/p.trail.length));
+    }
+    // glow
+    drawingContext.shadowColor=p.col; drawingContext.shadowBlur=8;
+    const c=color(p.col); c.setAlpha(a*255);
+    fill(c);
+    circle(p.x,p.y,p.size*a*1.2);
+    if(p.sparkle && random()<0.3){ fill(255,255,255,a*255); circle(p.x,p.y,p.size*0.5); }
+  }
+  drawingContext.shadowBlur=0;
+  for(const s of sparks){
+    drawingContext.shadowColor="#fff"; drawingContext.shadowBlur=20;
+    fill(255,255,255,s.life*100); circle(s.x,s.y,s.r*s.life*2);
+    drawingContext.shadowBlur=0;
+  }
+}
+
+function drawStars(){
+  noStroke();
+  for(const s of stars){
+    s.tw+=s.sp;
+    fill(255,255,255,(0.3+0.7*abs(sin(s.tw)))*200);
+    circle(s.x,s.y,s.r*2);
+  }
+}
+
+function drawBackground(){
+  // dark gradient sky
+  const top=color(5,5,20), bot=color(10,8,35);
+  noStroke();
+  for(let y=0;y<CH;y+=4){ fill(lerpColor(top,bot,y/CH)); rect(0,y,CW,4); }
+}
+
+function draw(){
+  // fade trail effect
+  fill(0,0,0,40); noStroke(); rect(0,0,CW,CH);
+  drawBackground(); drawStars();
+  // auto-launch
+  if(started){
+    autoTimer+=deltaTime;
+    if(autoTimer>random(1500,3000)){ autoTimer=0; launchFirework(random(CW*0.2,CW*0.8),random(CH*0.15,CH*0.4)); }
+  }
+  updateRockets(); updateParticles();
+  drawRockets(); drawParticles();
 }
 </script>
 </body>
