@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Brush Strokes — p5js interactive art</title>
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; color:#fff;
+    -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  #hint { position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    font-size:12px; letter-spacing:3px; color:rgba(255,255,255,0.4); pointer-events:none; text-transform:uppercase; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
+</head>
+<body>
+<div id="wrap"></div>
+<div id="hint">Tap to begin &nbsp;·&nbsp; drag to paint &nbsp;·&nbsp; R to reset</div>
+<script>
+/* Brush Strokes — white calligraphy written stroke by stroke on black.
+   Words write themselves with a brush-pen texture. Freehand painting too.
+   ALL TEXT IS IN ENGLISH. Procedural zen music. Interactive. */
+
+const WORDS = ["BREATHE","FLOW","STILLNESS","BECOME","WHISPER","DRIFT","SILENCE","AWAKEN","EMBER","LUMEN"];
+let CW, CH;
+let wordIndex, charProgress, holdTimer, started, fadeOut;
+let userStrokes, currentStroke;
+let audioCtx, masterGain, musicTimer, musicStep;
+
+function setup(){
+  CW=windowWidth; CH=windowHeight;
+  const c=createCanvas(CW,CH); c.parent('wrap');
+  textFont('Georgia,"Times New Roman",serif');
+  textStyle(BOLD);
+  initScene();
+}
+function windowResized(){ CW=windowWidth; CH=windowHeight; resizeCanvas(CW,CH); initScene(); }
+
+function initScene(){
+  wordIndex=0; charProgress=0; holdTimer=0; started=false; fadeOut=0;
+  userStrokes=[]; currentStroke=null;
+}
+
+// ---- AUDIO (zen, minimal) ----
+function startAudio(){
+  if(audioCtx) return;
+  try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){return;}
+  masterGain=audioCtx.createGain(); masterGain.gain.value=0;
+  masterGain.connect(audioCtx.destination);
+  masterGain.gain.setValueAtTime(0,audioCtx.currentTime);
+  masterGain.gain.linearRampToValueAtTime(0.32,audioCtx.currentTime+4);
+  const delay=audioCtx.createDelay(3); delay.delayTime.value=0.8;
+  const fb=audioCtx.createGain(); fb.gain.value=0.55;
+  const wet=audioCtx.createGain(); wet.gain.value=0.6;
+  delay.connect(fb); fb.connect(delay); delay.connect(wet); wet.connect(masterGain);
+  audioCtx._send=delay;
+  const drone=audioCtx.createOscillator(); drone.type="sine"; drone.frequency.value=65.41; // C2
+  const dg=audioCtx.createGain(); dg.gain.value=0.1; drone.connect(dg); dg.connect(masterGain); drone.start();
+  musicStep=0; scheduleMusic();
+}
+// pentatonic, very sparse and meditative
+const SCALE=[261.63,293.66,329.63,392.00,440.00,523.25];
+function scheduleMusic(){
+  if(!audioCtx) return;
+  const t=audioCtx.currentTime;
+  const note=SCALE[musicStep%SCALE.length];
+  playNote(note,t,3.5,0.08,"sine");
+  if(musicStep%2===0) playNote(note*2,t+0.4,2.0,0.04,"sine");
+  musicStep++;
+  musicTimer=setTimeout(scheduleMusic,900); // slow, sparse
+}
+function playNote(freq,when,dur,vol,type){
+  if(!audioCtx) return;
+  const osc=audioCtx.createOscillator(); osc.type=type||"sine"; osc.frequency.value=freq;
+  const g=audioCtx.createGain();
+  g.gain.setValueAtTime(0.0001,when);
+  g.gain.exponentialRampToValueAtTime(vol,when+0.15);
+  g.gain.exponentialRampToValueAtTime(0.0001,when+dur);
+  osc.connect(g); g.connect(masterGain); g.connect(audioCtx._send);
+  osc.start(when); osc.stop(when+dur+0.2);
+}
+
+// ---- INTERACTION ----
+function mousePressed(){ handlePress(mouseX,mouseY); }
+function touchStarted(){ handlePress(touchX,touchY); return false; }
+function handlePress(x,y){
+  if(!started){ started=true; startAudio(); document.getElementById('hint').style.opacity='0.3'; }
+  // start a freehand stroke
+  currentStroke={ points:[{x,y}], seed:random(1000) };
+}
+function mouseDragged(){ if(currentStroke){ currentStroke.points.push({x:mouseX,y:mouseY}); } }
+function touchMoved(){ if(currentStroke){ currentStroke.points.push({x:touchX,y:touchY}); } return false; }
+function mouseReleased(){ finishStroke(); }
+function touchEnded(){ finishStroke(); return false; }
+function finishStroke(){
+  if(currentStroke && currentStroke.points.length>1){ userStrokes.push(currentStroke); if(userStrokes.length>12) userStrokes.shift(); }
+  currentStroke=null;
+}
+function keyPressed(){ if(key==='r'||key==='R'){ initScene(); } }
+
+// ---- DRAW ----
+function draw(){
+  background(0);
+
+  // ---- auto-writing word ----
+  const word=WORDS[wordIndex];
+  textAlign(CENTER,CENTER);
+  const sz=min(CW*0.85/textWidthEst(word), CH*0.22);
+  textSize(sz);
+  const totalW=textWidth(word);
+  const startX=CW/2-totalW/2;
+  const baseY=CH/2;
+
+  if(started){
+    charProgress += 0.035*(deltaTime/16.67);
+    if(charProgress >= word.length+1.5){
+      holdTimer += deltaTime/16.67;
+      if(holdTimer>90){
+        holdTimer=0; wordIndex=(wordIndex+1)%WORDS.length; charProgress=0;
+      }
+    }
+  }
+
+  // draw each character with progressive brush reveal
+  for(let i=0;i<word.length;i++){
+    const ch=word[i];
+    const cw=textWidth(ch);
+    const cx=startY(startX,word,i)+cw/2;
+    if(i < floor(charProgress)){
+      // fully written — brush texture
+      drawBrushChar(ch,cx,baseY,sz,1,1.0);
+    } else if(i===floor(charProgress)){
+      const frac=charProgress-i;
+      drawBrushChar(ch,cx,baseY,sz,frac,1.0);
+      // brush head glow
+      drawingContext.shadowColor="#ffffff";
+      drawingContext.shadowBlur=20;
+      noStroke(); fill(255,255,255,220);
+      circle(cx,baseY,6+3*sin(frameCount*0.1));
+      drawingContext.shadowBlur=0;
+    }
+  }
+
+  // ---- draw user freehand strokes ----
+  for(const s of userStrokes) drawUserStroke(s);
+  if(currentStroke) drawUserStroke(currentStroke);
+}
+
+function textWidthEst(w){ // approximate before textSize is set consistently
+  return w.length*0.62;
+}
+function startY(startX,word,i){
+  let x=startX;
+  for(let k=0;k<i;k++) x+=textWidth(word[k]);
+  return x;
+}
+
+// draw a character with brush-pen texture (multiple offset passes + noise)
+function drawBrushChar(ch,cx,cy,sz,frac,alpha){
+  push();
+  translate(cx,cy);
+  textSize(sz);
+  textAlign(CENTER,CENTER);
+  textStyle(BOLD);
+  // wet ink glow
+  drawingContext.shadowColor="rgba(255,255,255,0.5)";
+  drawingContext.shadowBlur=12*frac;
+  // multi-pass brush texture
+  for(let p=0;p<4;p++){
+    const ox=(noise(p*7.3+frameCount*0.01)-0.5)*3*frac;
+    const oy=(noise(p*3.1+frameCount*0.012)-0.5)*3*frac;
+    const a=alpha*(0.3+0.2*p)*frac;
+    fill(255,255,255,a*255);
+    text(ch,ox,oy);
+  }
+  // crisp core
+  fill(255,255,255,255*frac);
+  text(ch,0,0);
+  drawingContext.shadowBlur=0;
+  pop();
+}
+
+// draw a freehand user stroke with variable brush thickness
+function drawUserStroke(s){
+  const pts=s.points;
+  if(pts.length<2) return;
+  noStroke();
+  for(let i=1;i<pts.length;i++){
+    const p0=pts[i-1], p1=pts[i];
+    const dx=p1.x-p0.x, dy=p1.y-p0.y;
+    const dist=Math.sqrt(dx*dx+dy*dy);
+    // thickness: slower = thicker (inverse of speed)
+    const speed=constrain(dist,1,30);
+    const r=constrain(18-speed*0.4,3,16);
+    const a=constrain(255-i*0.5,80,255);
+    // soft brush: multiple circles
+    fill(255,255,255,a*0.3);
+    circle((p0.x+p1.x)/2,(p0.y+p1.y)/2,r*1.8);
+    fill(255,255,255,a*0.6);
+    circle((p0.x+p1.x)/2,(p0.y+p1.y)/2,r);
+    fill(255,255,255,a);
+    circle((p0.x+p1.x)/2,(p0.y+p1.y)/2,r*0.5);
+  }
+}
+</script>
+</body>
+</html>
